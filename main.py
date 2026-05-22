@@ -6,10 +6,9 @@ from pydantic import BaseModel
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-ATLAS_KEY   = os.environ.get("ATLASCLOUD_API_KEY", "")
-OPENAI_KEY  = os.environ.get("OPENAI_API_KEY", "")
-ATLAS_BASE  = "https://api.atlascloud.ai"
-OPENAI_BASE = "https://api.openai.com/v1"
+ATLAS_KEY  = os.environ.get("ATLASCLOUD_API_KEY", "")
+OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
+ATLAS_BASE = "https://api.atlascloud.ai"
 
 SCRIPT_PROMPT = """You are an expert video ad creative director. Return ONLY a JSON object — no markdown, no explanation, no code fences.
 {
@@ -47,9 +46,9 @@ def health():
 @app.post("/generate-script")
 async def generate_script(req: ScriptReq):
     if not OPENAI_KEY:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set in Railway environment.")
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set.")
     async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.post(f"{OPENAI_BASE}/chat/completions",
+        r = await c.post("https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"},
             json={
                 "model": "gpt-4o",
@@ -65,12 +64,12 @@ async def generate_script(req: ScriptReq):
     try:
         return {"brief": json.loads(text)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"JSON parse error: {str(e)} — raw: {text[:300]}")
+        raise HTTPException(status_code=500, detail=f"Parse error: {str(e)}")
 
 @app.post("/generate-video")
 async def generate_video(req: VideoReq):
     if not ATLAS_KEY:
-        raise HTTPException(status_code=500, detail="ATLASCLOUD_API_KEY not set in Railway environment.")
+        raise HTTPException(status_code=500, detail="ATLASCLOUD_API_KEY not set.")
     aspect = "9:16" if req.platform in ("TikTok","Instagram Reels","YouTube Shorts") else "16:9"
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.post(f"{ATLAS_BASE}/api/v1/model/generateImage",
