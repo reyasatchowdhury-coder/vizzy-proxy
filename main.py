@@ -79,25 +79,68 @@ async def generate_video(req: VideoReq):
     if r.status_code != 200:
         raise HTTPException(status_code=r.status_code, detail=r.text)
     d = r.json()
-    rid = d.get("request_id") or d.get("id") or (d.get("data") or {}).get("request_id")
-    if not rid:
-        raise HTTPException(status_code=500, detail=f"No request_id: {d}")
-    return {"request_id": rid}
+
+    # Atlas Cloud returns id inside 'data' and a 'get' poll URL
+    data = d.get("data", {})
+    rid = data.get("id") or d.get("id") or d.get("request_id")
+    poll_url = data.get("get") or d.get("get")
+
+    if not rid and not poll_url:
+        raise HTTPException(status_code=500, detail=f"No job ID in response: {d}")
+
+    return {"request_id": rid, "poll_url": poll_url}
 
 @app.get("/poll/{request_id}")
 async def poll(request_id: str):
     if not ATLAS_KEY:
         raise HTTPException(status_code=500, detail="ATLASCLOUD_API_KEY not set.")
+    # Use the correct Atlas Cloud prediction endpoint
+    poll_url = f"{ATLAS_BASE}/api/v1/model/prediction/{request_id}"
     async with httpx.AsyncClient(timeout=20) as c:
-        r = await c.get(f"{ATLAS_BASE}/api/v1/model/result/{request_id}",
-            headers={"Authorization": f"Bearer {ATLAS_KEY}"})
+        r = await c.get(poll_url, headers={"Authorization": f"Bearer {ATLAS_KEY}"})
     if r.status_code != 200:
         raise HTTPException(status_code=r.status_code, detail=r.text)
     d = r.json()
-    raw = ((d.get("status") or (d.get("data") or {}).get("status")) or "pending").lower()
+    data = d.get("data", d)
+    raw = (data.get("status") or d.get("status") or "processing").lower()
     status = ("success" if raw in ("success","succeeded","completed","done")
               else "failed" if raw in ("failed","error","cancelled")
               else "processing")
-    url = ((d.get("output") or {}).get("url") or (d.get("data") or {}).get("url")
-           or d.get("url") or (d.get("result") or {}).get("url"))
-    return {"status": status, "url": url}
+    # Extract video URL from outputs
+    outputs = data.get("outputs") or d.get("outputs")
+    url = None
+    if outputs:
+        if isinstance(outputs, list) and len(outputs) > 0:
+            url = outputs[0]
+        elif isinstance(outputs, dict):
+            url = outputs.get("url") or outputs.get("video")
+    if not url:
+        url = data.get("url") or d.get("url")
+    return {"status": status, "url": url, "raw_status": raw}
+
+@app.post("/poll-by-url")
+async def poll_by_url(body: dict):
+    """Poll using the exact URL returned by Atlas Cloud"""
+    poll_url = body.get("poll_url")
+    if not poll_url:
+        raise HTTPException(status_code=400, detail="poll_url required")
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.get(poll_url, headers={"Authorization": f"Bearer {ATLAS_KEY}"})
+    if r.status_code != 200:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    d = r.json()
+    data = d.get("data", d)
+    raw = (data.get("status") or d.get("status") or "processing").lower()
+    status = ("success" if raw in ("success","succeeded","completed","done")
+              else "failed" if raw in ("failed","error","cancelled")
+              else "processing")
+    outputs = data.get("outputs") or d.get("outputs")
+    url = None
+    if outputs:
+        if isinstance(outputs, list) and len(outputs) > 0:
+            url = outputs[0]
+        elif isinstance(outputs, dict):
+            url = outputs.get("url") or outputs.get("video")
+    if not url:
+        url = data.get("url") or d.get("url")
+    return {"status": status, "url": url, "raw": d}
